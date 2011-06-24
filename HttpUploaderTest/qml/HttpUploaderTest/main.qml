@@ -13,5 +13,16 @@ Rectangle {
                 console.log("Upload done with status " + status);
             }
         }
+
+        onProgressChanged: {
+            console.log("Upload progress = " + progress)
+        }
+
+        Component.onCompleted: {
+            theUploader.open("http://test_url");
+            theUploader.addField("name", "Dooom !!!!");
+            theUploader.addFile("filetoUpload", "testfile.txt");
+            theUploader.send()
+        }
     }
 }
