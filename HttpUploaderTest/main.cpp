@@ -6,6 +6,7 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
+    qmlRegisterUncreatableType<HttpPostField>("HttpUp", 1, 0, "HttpPostField", "Can't touch this");
     qmlRegisterType<HttpPostFieldValue>("HttpUp", 1, 0, "HttpPostFieldValue");
     qmlRegisterType<HttpPostFieldFile>("HttpUp", 1, 0, "HttpPostFieldFile");
     qmlRegisterType<HttpUploader>("HttpUp", 1, 0, "HttpUploader");

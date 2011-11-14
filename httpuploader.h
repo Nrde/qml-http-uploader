@@ -21,10 +21,16 @@
 
 // Register the types below by calling, e.g.:
 //
-// qmlRegisterType<HttpPostFieldValue>("HttpUp", 1, 0, "HttpPostFieldValue");
-// qmlRegisterType<HttpPostFieldFile>("HttpUp", 1, 0, "HttpPostFieldFile");
-// qmlRegisterType<HttpUploader>("HttpUp", 1, 0, "HttpUploader");
+//    qmlRegisterUncreatableType<HttpPostField>("HttpUp", 1, 0, "HttpPostField", "Can't touch this");
+//    qmlRegisterType<HttpPostFieldValue>("HttpUp", 1, 0, "HttpPostFieldValue");
+//    qmlRegisterType<HttpPostFieldFile>("HttpUp", 1, 0, "HttpPostFieldFile");
+//    qmlRegisterType<HttpUploader>("HttpUp", 1, 0, "HttpUploader");
 
+class HttpUploader;
+
+//! Base field for the HTTP uploader
+//! This object is not instantiated directly, it rather acts as a base object for
+//! all HTTP POST fields which can be added to the HttpUploader object.
 class HttpPostField : public QObject
 {
     Q_OBJECT
@@ -33,35 +39,51 @@ class HttpPostField : public QObject
     Q_PROPERTY(FieldType type READ type CONSTANT FINAL)
     Q_PROPERTY(int contentLength READ contentLength NOTIFY contentLengthChanged)
 public:
+    //! Defines type of the HTTP POST field
     enum FieldType {
-        FieldInvalid,
-        FieldValue,
-        FieldFile
+        FieldInvalid,       //!< Invalid field - not initialized
+        FieldValue,         //!< Field is string
+        FieldFile           //!< Filed is file
     };
 
     HttpPostField(QObject * parent = 0);
     virtual ~HttpPostField();
 
+    //! Name of the field
     QString name() const;
+    //! Sets name of the field
     void setName(const QString& name);
 
+    //! HTTP POST field type
     HttpPostField::FieldType type() const;
-    void setType(HttpPostField::FieldType type);
 
+    //! Return length of the content uploaded
     virtual int contentLength() = 0;
+
+    //! Create QIODevice object which returns data to be uploaded
     virtual QIODevice * createIoDevice(QObject * parent = 0) = 0;
+
+    //! Check if the field is valid (e.g. file exists)
+    virtual bool validateVield() = 0;
 
 signals:
     void nameChanged();
     void contentLengthChanged();
 
 protected:
+    //! Sets type of the field. Used only by derived classes
+    void setType(HttpPostField::FieldType type);
+
+protected:
+    friend class HttpUploader;
     FieldType mType;
     QString mName;
+    bool mInstancedFromQml;
 };
 
-QML_DECLARE_TYPEINFO(HttpPostField, 0)
+QML_DECLARE_TYPE(HttpPostField)
 
+//! UTF-8 encoded POST field
 class HttpPostFieldValue : public HttpPostField
 {
     Q_OBJECT
@@ -69,11 +91,14 @@ class HttpPostFieldValue : public HttpPostField
 public:
     HttpPostFieldValue(QObject * parent = 0);
 
+    //! Return value as Unicode string
     QString value() const;
+    //! Transform unicode string to UTF-8 buffer
     void setValue(const QString& value);
 
     virtual int contentLength();
     virtual QIODevice * createIoDevice(QObject * parent = 0);
+    virtual bool validateVield();
 
 signals:
     void valueChanged();
@@ -82,8 +107,9 @@ private:
     QByteArray mValue;
 };
 
-QML_DECLARE_TYPEINFO(HttpPostFieldValue, 0)
+QML_DECLARE_TYPE(HttpPostFieldValue)
 
+//! Raw file
 class HttpPostFieldFile : public HttpPostField
 {
     Q_OBJECT
@@ -94,11 +120,16 @@ public:
 
     virtual int contentLength();
     virtual QIODevice * createIoDevice(QObject * parent = 0);
+    virtual bool validateVield();
 
+    //! Source URL for the file
     QUrl source() const;
+    //! Sets source URL of the file
     void setSource(const QUrl& url);
 
+    //! Returns MIME type of the file
     QString mimeType() const;
+    //! Sets MIME type of the file. If MIME type is empty, application/octet-stream is used by default
     void setMimeType(const QString& mime);
 
 signals:
@@ -110,35 +141,41 @@ private:
     QString mMime;
 };
 
-QML_DECLARE_TYPEINFO(HttpPostFieldFile, 0)
+QML_DECLARE_TYPE(HttpPostFieldFile)
 
 class HttpUploaderDevice;
 
-class HttpUploader : public QDeclarativeItem
+//! The HTTP uploader objects. It works similar to the XMLHttpRequest object, but allows
+//! uploading of the HTML form-like data.
+class HttpUploader : public QObject, public QDeclarativeParserStatus
 {
     Q_OBJECT
+    Q_INTERFACES(QDeclarativeParserStatus)
     Q_ENUMS(State)
     Q_PROPERTY(QUrl url READ url WRITE setUrl NOTIFY urlChanged)
     Q_PROPERTY(QDeclarativeListProperty<HttpPostField> postFields READ postFields)
     Q_PROPERTY(qreal progress READ progress NOTIFY progressChanged)
-    Q_PROPERTY(State state READ state NOTIFY stateChanged)
+    Q_PROPERTY(State uploadState READ state NOTIFY stateChanged)
     Q_PROPERTY(int status READ status NOTIFY statusChanged)
     Q_PROPERTY(QString errorString READ errorString)
     Q_PROPERTY(QString responseText READ responseText)
     Q_CLASSINFO("DefaultProperty", "postFields")
 public:
+    //! State of the uploader object (compatible with XMLHttpRequest state)
     enum State {
-        Unsent,
-        Opened,       
-        Loading,
-        Aborting,
-        Done
+        Unsent,     //!< Object is closed
+        Opened,     //!< Object is open and ready to send
+        Loading,    //!< Data is being sent
+        Aborting,   //!< State entered when upload is being aborted
+        Done        //!< Upload finished (you need to examine status property)
     };
 
-    explicit HttpUploader(QDeclarativeItem *parent = 0);
+    explicit HttpUploader(QObject *parent = 0);
     virtual ~HttpUploader();
 
+    //! Get the destination URL
     QUrl url() const;
+    //! Set the destination URL of the upload
     void setUrl(const QUrl& url);
 
     QDeclarativeListProperty<HttpPostField> postFields();
@@ -149,12 +186,19 @@ public:
     int status() const;
 
 public slots:
+    //! Reset object to the initial state (close files/clear fields/etc.)
     void clear();
+    //! Set object to the open state with specified URL
     void open(const QUrl& url);
+    //! Start upload
     void send();
+    //! Start upload, but use file as POST body
     void sendFile(const QString& fileName);
+    //! Abort current transaction
     void abort();
+    //! Add key/value field
     void addField(const QString& fieldName, const QString& fieldValue);
+    //! Add file field
     void addFile(const QString& fieldName, const QString& fileName, const QString& mimeType = QString());
 
 signals:
@@ -169,17 +213,22 @@ private:
     static HttpPostField * AtFunction(QDeclarativeListProperty<HttpPostField> *, int);
     static void ClearFunction(QDeclarativeListProperty<HttpPostField> *);
 
+private: // QDeclarativeParserStatus
+    virtual void classBegin();
+    virtual void componentComplete();
+
 private slots:
     void reply_finished();
     void uploadProgress(qint64 bytesSent, qint64 bytesTotal);
 
 private:
+    bool mComplete;
     QNetworkAccessManager * mNetworkAccessManager;
     QUrl mUrl;
     QList< QPointer<HttpPostField> > mPostFields;
     qreal mProgress;
     State mState;
-    QNetworkReply * mPendingReply;
+    QPointer<QNetworkReply> mPendingReply;
     QString mErrorString;
     QByteArray mBoundaryString;
     QIODevice * mUploadDevice;
@@ -187,7 +236,5 @@ private:
     QByteArray mResponse;
     friend class HttpUploaderDevice;
 };
-
-QML_DECLARE_TYPEINFO(HttpUploader, 0)
 
 #endif // HTTPUPLOADER_H

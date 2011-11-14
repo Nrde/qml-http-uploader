@@ -8,9 +8,10 @@ Rectangle {
     HttpUploader {
         id: theUploader
 
-        onStateChanged: {
-            if( state == HttpUploader.Done ) {
+        onUploadStateChanged: {
+            if( uploadState == HttpUploader.Done ) {
                 console.log("Upload done with status " + status);
+                console.log("Error is "  + errorString)
             }
         }
 
@@ -21,7 +22,7 @@ Rectangle {
         Component.onCompleted: {
             theUploader.open("http://test_url");
             theUploader.addField("name", "Dooom !!!!");
-            theUploader.addFile("filetoUpload", "testfile.txt");
+            theUploader.addFile("filetoUpload", "qml/HttpUploaderTest/main.qml");
             theUploader.send()
         }
     }

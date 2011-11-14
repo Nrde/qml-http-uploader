@@ -14,7 +14,7 @@
  */
 
 #include "httpuploader.h"
-#include <stdexcept>
+#include <QDebug>
 
 class HttpUploaderDevice : public QIODevice
 {
@@ -258,7 +258,8 @@ void HttpUploaderDevice::appendField(HttpPostField * field)
 
 HttpPostField::HttpPostField(QObject * parent)
     : QObject(parent),
-      mType(FieldInvalid)
+      mType(FieldInvalid),
+      mInstancedFromQml(true)
 {
 }
 
@@ -321,6 +322,11 @@ QIODevice * HttpPostFieldValue::createIoDevice(QObject * parent)
     return buffer;
 }
 
+bool HttpPostFieldValue::validateVield()
+{
+    return true;
+}
+
 HttpPostFieldFile::HttpPostFieldFile(QObject * parent)
     : HttpPostField(parent)
 {
@@ -339,7 +345,7 @@ QIODevice * HttpPostFieldFile::createIoDevice(QObject * parent)
     if(!file->open(QFile::ReadOnly))
     {
         delete file;
-        throw std::runtime_error("Failed to open file");
+        Q_ASSERT_X(NULL, "HttpPostFieldFile::createIoDevice", "Failed to open file");
     }
     return file;
 }
@@ -367,19 +373,27 @@ void HttpPostFieldFile::setMimeType(const QString& mime)
     }
 }
 
-HttpUploader::HttpUploader(QDeclarativeItem *parent) :
-    QDeclarativeItem(parent),
+bool HttpPostFieldFile::validateVield()
+{
+    return QFile::exists(mSource.toLocalFile());
+}
+
+HttpUploader::HttpUploader(QObject *parent) :
+    QObject(parent),
     mProgress(0.0),
     mState(Unsent),
     mPendingReply(NULL),
     mUploadDevice(NULL),
     mStatus(0)
 {
-    mNetworkAccessManager = new QNetworkAccessManager(this);
+    mComplete = false;
 }
 
 HttpUploader::~HttpUploader()
 {
+    if(mPendingReply) {
+        mPendingReply->abort();
+    }
 }
 
 QUrl HttpUploader::url() const
@@ -450,11 +464,28 @@ void HttpUploader::ClearFunction(QDeclarativeListProperty<HttpPostField> * o)
             qWarning("HttpUploader: Invalid state when trying to clear fields");
         } else {
             for(int i = 0 ; i < self->mPostFields.size() ; ++i)
-                if(self->mPostFields[i] && self->mPostFields[i]->parent() == self)
+                if(self->mPostFields[i] && !self->mPostFields[i]->mInstancedFromQml)
                     delete self->mPostFields[i];
             self->mPostFields.clear();
         }
     }
+}
+
+void HttpUploader::classBegin()
+{
+    QDeclarativeEngine * engine = qmlEngine(this);
+
+    if(QDeclarativeNetworkAccessManagerFactory * factory = engine->networkAccessManagerFactory())
+    {
+        mNetworkAccessManager = factory->create(this);
+    } else {
+        mNetworkAccessManager = engine->networkAccessManager();
+    }
+}
+
+void HttpUploader::componentComplete()
+{
+    mComplete = true;
 }
 
 qreal HttpUploader::progress() const
@@ -488,7 +519,7 @@ void HttpUploader::clear()
         mState = Unsent;
         mUrl.clear();
         for(int i = 0 ; i < mPostFields.size() ; ++i)
-            if(mPostFields[i] && mPostFields[i]->parent() == this)
+            if(mPostFields[i] && !mPostFields[i]->mInstancedFromQml)
                 delete mPostFields[i];
         mPostFields.clear();
         mProgress = 0;
@@ -517,11 +548,19 @@ void HttpUploader::open(const QUrl& url)
 void HttpUploader::send()
 {
     if( mState == Opened ) {
-        QNetworkRequest request(mUrl);
+        QNetworkRequest request(mUrl);       
 
         QCryptographicHash hash(QCryptographicHash::Sha1);
         foreach(QPointer<HttpPostField> field, mPostFields) {
             if( !field.isNull() ) {
+                if(!field->validateVield()) {
+                    mState = Done;
+                    mErrorString = tr("Failed to validate POST fields");
+                    mStatus = -1;
+                    emit stateChanged();
+                    emit statusChanged();
+                    return;
+                }
                 hash.addData(field->name().toUtf8());
             }
         }
@@ -554,7 +593,16 @@ void HttpUploader::sendFile(const QString& fileName)
         QNetworkRequest request(mUrl);
 
         mUploadDevice = new QFile(fileName, this);
-        mUploadDevice->open(QIODevice::ReadOnly);
+        if(!mUploadDevice->open(QIODevice::ReadOnly)) {
+            mState = Done;
+            mErrorString = mUploadDevice->errorString();
+            delete mUploadDevice;
+            mUploadDevice = NULL;
+            mStatus = -1;
+            emit stateChanged();
+            emit statusChanged();
+            return;
+        }
 
         mPendingReply = mNetworkAccessManager->post(request, mUploadDevice);
         mState = Loading;
@@ -584,6 +632,7 @@ void HttpUploader::addField(const QString& fieldName, const QString& fieldValue)
     HttpPostFieldValue * field = new HttpPostFieldValue(this);
     field->setName(fieldName);
     field->setValue(fieldValue);
+    field->mInstancedFromQml = false;
     mPostFields.append(field);
 }
 
@@ -593,6 +642,7 @@ void HttpUploader::addFile(const QString& fieldName, const QString& fileName, co
     field->setName(fieldName);
     field->setSource(QUrl::fromLocalFile(fileName));
     field->setMimeType(mimeType);
+    field->mInstancedFromQml = false;
     mPostFields.append(field);
 }
 
@@ -658,11 +708,15 @@ void HttpUploader::uploadProgress(qint64 bytesSent, qint64 bytesTotal)
 {
     if( bytesTotal > 0 )
     {
-        mProgress = qreal(bytesSent) / qreal(bytesTotal);
+        qreal progress = qreal(bytesSent) / qreal(bytesTotal);
+        if(!qFuzzyCompare(progress, mProgress))
+        {
+            mProgress = progress;
 #ifdef QT_DEBUG
-        qDebug() << "HttpUploader: Progress is" << mProgress;
+            qDebug() << "HttpUploader: Progress is" << mProgress;
 #endif
-        emit progressChanged();
+            emit progressChanged();
+        }
     }
 }
 
